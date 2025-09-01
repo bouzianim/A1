@@ -1,302 +1,253 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import pickle
-import os
-import glob
-from io import StringIO
+your-folder/
+    ├── streamlit_app.py (this file)
+    ├── neural_network_ftr.pkl
+    ├── gradient_boosting_ftr.pkl
+    ├── logistic_regression_ftr.pkl
+    ├── scaler_main.pkl (optional)
+    └── encoder_league.pkl (optional)
+    ```
+    """)
+    return
 
-class ModelPredictor:
-    """Load and use saved ML models for predictions"""
+if not st.session_state.models_loaded:
+    st.warning("⚠️ Please load the models first using the 'Load All Models' button in the sidebar.")
+    st.info("Click the red button in the sidebar to load your models!")
+    return
+
+# Create tabs - NOW THIS WILL SHOW!
+tab1, tab2, tab3 = st.tabs(["🎯 Single Match Prediction", "📊 Batch Predictions", "ℹ️ Model Info"])
+
+with tab1:
+    st.header("Single Match Prediction")
     
-    def __init__(self, model_path='.'):
-        self.model_path = model_path
-        self.models = {}
-        self.scaler = None
-        self.label_encoders = {}
-        self.load_all_models()
+    col1, col2 = st.columns(2)
     
-    def load_model_file(self, file_path):
-        """Load a model file using multiple methods"""
-        try:
-            # Try joblib first
-            import joblib
-            return joblib.load(file_path)
-        except ImportError:
-            try:
-                # Try pickle as fallback
-                with open(file_path, 'rb') as f:
-                    return pickle.load(f)
-            except Exception as e:
-                st.error(f"Could not load {file_path}: {e}")
-                return None
-        except Exception as e:
-            try:
-                # Try pickle as fallback
-                with open(file_path, 'rb') as f:
-                    return pickle.load(f)
-            except Exception as e2:
-                st.error(f"Could not load {file_path} with joblib or pickle: {e}, {e2}")
-                return None
-    
-    def load_all_models(self):
-        """Load all saved models and preprocessing objects from current directory"""
+    with col1:
+        st.subheader("⚽ Match Details")
         
-        # Load models - look for .pkl files that are models (not scaler or encoder)
-        model_files = []
-        for file in glob.glob(os.path.join(self.model_path, "*.pkl")):
-            filename = os.path.basename(file)
-            if not filename.startswith(('scaler_', 'encoder_')):
-                model_files.append(filename)
-        
-        if not model_files:
-            st.warning("No model files found in the current directory")
-            return
-        
-        for file in model_files:
-            try:
-                model_name = file.replace('.pkl', '')
-                model_path = os.path.join(self.model_path, file)
-                loaded_model = self.load_model_file(model_path)
-                if loaded_model is not None:
-                    self.models[model_name] = loaded_model
-                    st.success(f"✅ Loaded model: {model_name}")
-            except Exception as e:
-                st.error(f"❌ Failed to load {file}: {e}")
-        
-        # Load scaler - look for scaler files
-        scaler_files = glob.glob(os.path.join(self.model_path, "scaler_*.pkl"))
-        if scaler_files:
-            try:
-                loaded_scaler = self.load_model_file(scaler_files[0])
-                if loaded_scaler is not None:
-                    self.scaler = loaded_scaler
-                    st.success(f"✅ Loaded scaler: {os.path.basename(scaler_files[0])}")
-            except Exception as e:
-                st.warning(f"⚠️ Could not load scaler: {e}")
-        else:
-            st.info("ℹ️ No scaler found (this is optional)")
-        
-        # Load label encoders
-        encoder_files = glob.glob(os.path.join(self.model_path, "encoder_*.pkl"))
-        for file in encoder_files:
-            try:
-                filename = os.path.basename(file)
-                encoder_name = filename.replace('encoder_', '').replace('.pkl', '')
-                loaded_encoder = self.load_model_file(file)
-                if loaded_encoder is not None:
-                    self.label_encoders[encoder_name] = loaded_encoder
-                    st.success(f"✅ Loaded encoder: {encoder_name}")
-            except Exception as e:
-                st.warning(f"⚠️ Could not load encoder {file}: {e}")
-        
-        if not encoder_files:
-            st.info("ℹ️ No encoders found (this is optional)")
-    
-    def engineer_features(self, h_odd, d_odd, a_odd, league='Premier League'):
-        """Create feature vector for single match"""
-        
-        # Extract decimals
-        h_decimal = int((h_odd % 1) * 100) if (h_odd % 1) > 0 else int(h_odd * 100) % 100
-        d_decimal = int((d_odd % 1) * 100) if (d_odd % 1) > 0 else int(d_odd * 100) % 100
-        a_decimal = int((a_odd % 1) * 100) if (a_odd % 1) > 0 else int(a_odd * 100) % 100
-        
-        sum_decimals = h_decimal + d_decimal + a_decimal
-        
-        # Calculate all features (must match training features exactly)
-        features = {
-            'h_odd': h_odd,
-            'd_odd': d_odd,
-            'a_odd': a_odd,
-            'h_decimal': h_decimal,
-            'd_decimal': d_decimal,
-            'a_decimal': a_decimal,
-            'sum_decimals': sum_decimals,
-            'home_draw_ratio': h_odd / d_odd,
-            'home_away_ratio': h_odd / a_odd,
-            'draw_away_ratio': d_odd / a_odd,
-            'draw_div4': d_decimal / 4,
-            'sum_div10': sum_decimals / 10,
-            'sum_div100': sum_decimals / 100,
-        }
-        
-        # Pattern decimals
-        features['draw_div4_decimal'] = int((features['draw_div4'] % 1) * 100) if features['draw_div4'] % 1 else int(features['draw_div4']) % 100
-        features['sum_div10_decimal'] = int((features['sum_div10'] % 1) * 100) if features['sum_div10'] % 1 else int(features['sum_div10']) % 100
-        features['sum_div100_decimal'] = int((features['sum_div100'] % 1) * 100) if features['sum_div100'] % 1 else int(features['sum_div100'] * 100) % 100
-        
-        # Pattern matches (binary)
-        features['draw_div4_matches_h'] = 1 if str(int(features['draw_div4_decimal']))[0] == str(h_decimal)[0] else 0
-        features['draw_div4_matches_d'] = 1 if str(int(features['draw_div4_decimal']))[0] == str(d_decimal)[0] else 0
-        features['draw_div4_matches_a'] = 1 if str(int(features['draw_div4_decimal']))[0] == str(a_decimal)[0] else 0
-        
-        # Ratio signals
-        features['ratio_away_signal'] = 1 if features['home_away_ratio'] > 1.5 else 0
-        features['ratio_draw_signal'] = 1 if 0.8 <= features['home_draw_ratio'] <= 1.2 else 0
-        features['ratio_home_signal'] = 1 if features['home_away_ratio'] < 0.7 else 0
-        
-        # League encoding
-        if 'league' in self.label_encoders:
-            try:
-                features['league_encoded'] = self.label_encoders['league'].transform([league])[0]
-            except:
-                features['league_encoded'] = 0  # Default for unknown leagues
-        else:
-            features['league_encoded'] = 0
-        
-        # Statistical features
-        odds_list = [h_odd, d_odd, a_odd]
-        features['odds_variance'] = np.var(odds_list)
-        features['odds_mean'] = np.mean(odds_list)
-        features['favorite_odds'] = min(odds_list)
-        
-        return features
-    
-    def predict_single_match(self, h_odd, d_odd, a_odd, league='Premier League'):
-        """Predict outcomes for a single match"""
-        
-        if not self.models:
-            st.error("No models loaded! Please make sure your .pkl model files are in the same directory as this app.")
-            return {}, {}
-        
-        # Engineer features
-        features_dict = self.engineer_features(h_odd, d_odd, a_odd, league)
-        
-        # Convert to DataFrame with correct column order
-        feature_names = list(features_dict.keys())
-        features_df = pd.DataFrame([list(features_dict.values())], columns=feature_names)
-        
-        # Scale features if scaler available
-        if self.scaler:
-            features_scaled = self.scaler.transform(features_df)
-        else:
-            features_scaled = features_df.values
-        
-        results = {}
-        
-        # Make predictions with all available models
-        for model_name, model in self.models.items():
-            target = 'FTR' if '_ftr' in model_name else 'HTR'
-            algorithm = model_name.replace('_ftr', '').replace('_htr', '')
+        # Input form
+        with st.form("prediction_form"):
+            h_odd = st.number_input("🏠 Home Team Odds", min_value=1.01, max_value=50.0, value=2.0, step=0.01, help="Enter the betting odds for home team win")
+            d_odd = st.number_input("🤝 Draw Odds", min_value=1.01, max_value=50.0, value=3.5, step=0.01, help="Enter the betting odds for draw")
+            a_odd = st.number_input("✈️ Away Team Odds", min_value=1.01, max_value=50.0, value=3.0, step=0.01, help="Enter the betting odds for away team win")
+            league = st.selectbox("🏆 League", 
+                                ["Premier League", "La Liga", "Serie A", "Bundesliga", "Ligue 1", "Other"], 
+                                help="Select the league")
             
-            # Choose appropriate input data
-            if algorithm in ['logistic_regression', 'neural_network']:
-                X_input = features_scaled
-            else:
-                X_input = features_df
+            if league == "Other":
+                league = st.text_input("Enter League Name", value="Premier League")
             
-            try:
-                prediction = model.predict(X_input)[0]
-                probabilities = model.predict_proba(X_input)[0]
-                confidence = max(probabilities)
-                
-                prob_dict = dict(zip(model.classes_, probabilities))
-                
-                if target not in results:
-                    results[target] = {}
-                
-                results[target][algorithm] = {
-                    'prediction': prediction,
-                    'confidence': confidence,
-                    'probabilities': prob_dict
-                }
-                
-            except Exception as e:
-                st.error(f"Error with {model_name}: {e}")
+            submit_button = st.form_submit_button("🔮 Make Prediction", type="primary")
         
-        return results, features_dict
-
-# Initialize session state
-if 'predictor' not in st.session_state:
-    st.session_state.predictor = None
-    st.session_state.models_loaded = False
-
-def check_available_files():
-    """Check what model files are available in current directory"""
-    pkl_files = glob.glob("*.pkl")
+        if submit_button:
+            try:
+                with st.spinner("Making predictions..."):
+                    predictions, features = st.session_state.predictor.predict_single_match(
+                        h_odd, d_odd, a_odd, league
+                    )
+                if predictions:
+                    st.session_state.current_predictions = predictions
+                    st.session_state.current_features = features
+                    st.session_state.current_odds = (h_odd, d_odd, a_odd)
+                    st.success("✅ Predictions completed!")
+            except Exception as e:
+                st.error(f"❌ Prediction error: {e}")
     
-    model_files = [f for f in pkl_files if not f.startswith(('scaler_', 'encoder_'))]
-    scaler_files = [f for f in pkl_files if f.startswith('scaler_')]
-    encoder_files = [f for f in pkl_files if f.startswith('encoder_')]
-    
-    return model_files, scaler_files, encoder_files
+    with col2:
+        if hasattr(st.session_state, 'current_predictions') and st.session_state.current_predictions:
+            st.subheader("🎯 Prediction Results")
+            
+            # Show match info
+            if hasattr(st.session_state, 'current_odds'):
+                h, d, a = st.session_state.current_odds
+                st.info(f"📊 Match Odds: {h:.2f} / {d:.2f} / {a:.2f}")
+            
+            predictions = st.session_state.current_predictions
+            
+            # Display FTR predictions
+            if 'FTR' in predictions:
+                st.write("**⏰ Full Time Result (FTR):**")
+                ftr_df_data = []
+                for model_name, pred_data in predictions['FTR'].items():
+                    ftr_df_data.append({
+                        'Model': model_name.replace('_', ' ').title(),
+                        'Prediction': pred_data['prediction'],
+                        'Confidence': f"{pred_data['confidence']:.1%}",
+                        'H': f"{pred_data['probabilities'].get('H', 0):.2f}",
+                        'D': f"{pred_data['probabilities'].get('D', 0):.2f}",
+                        'A': f"{pred_data['probabilities'].get('A', 0):.2f}"
+                    })
+                
+                if ftr_df_data:
+                    ftr_df = pd.DataFrame(ftr_df_data)
+                    st.dataframe(ftr_df, use_container_width=True, hide_index=True)
+            
+            # Display HTR predictions
+            if 'HTR' in predictions:
+                st.write("**⏱️ Half Time Result (HTR):**")
+                htr_df_data = []
+                for model_name, pred_data in predictions['HTR'].items():
+                    htr_df_data.append({
+                        'Model': model_name.replace('_', ' ').title(),
+                        'Prediction': pred_data['prediction'],
+                        'Confidence': f"{pred_data['confidence']:.1%}",
+                        'H': f"{pred_data['probabilities'].get('H', 0):.2f}",
+                        'D': f"{pred_data['probabilities'].get('D', 0):.2f}",
+                        'A': f"{pred_data['probabilities'].get('A', 0):.2f}"
+                    })
+                
+                if htr_df_data:
+                    htr_df = pd.DataFrame(htr_df_data)
+                    st.dataframe(htr_df, use_container_width=True, hide_index=True)
+                    
+            # Best predictions summary
+            st.subheader("🏆 Best Predictions")
+            if 'FTR' in predictions:
+                best_ftr = max(predictions['FTR'].items(), key=lambda x: x[1]['confidence'])
+                st.success(f"**FTR:** {best_ftr[1]['prediction']} ({best_ftr[1]['confidence']:.1%} confidence) - {best_ftr[0].replace('_', ' ').title()}")
+            
+            if 'HTR' in predictions:
+                best_htr = max(predictions['HTR'].items(), key=lambda x: x[1]['confidence'])
+                st.success(f"**HTR:** {best_htr[1]['prediction']} ({best_htr[1]['confidence']:.1%} confidence) - {best_htr[0].replace('_', ' ').title()}")
+        else:
+            st.info("👈 Enter match details and click 'Make Prediction' to see results here!")
 
-def main():
-    st.set_page_config(
-        page_title="Football Match Predictor",
-        page_icon="⚽",
-        layout="wide"
+with tab2:
+    st.header("📊 Batch Predictions from CSV")
+    
+    uploaded_file = st.file_uploader(
+        "Choose a CSV file", 
+        type="csv",
+        help="CSV should contain columns: B365H, B365D, B365A (and optionally FTR, HTR, League)"
     )
     
-    st.title("⚽ Football Match Prediction App")
-    st.markdown("---")
-    
-    # Show dependency info
-    with st.expander("ℹ️ Dependency Information"):
+    if uploaded_file is not None:
         try:
-            import joblib
-            st.success("✅ joblib is available")
-        except ImportError:
-            st.warning("⚠️ joblib not available, using pickle as fallback")
-        
-        st.info("Required packages: streamlit, pandas, numpy, scikit-learn")
-    
-    # Check available files
-    model_files, scaler_files, encoder_files = check_available_files()
-    
-    # Sidebar for model loading and file info
-    with st.sidebar:
-        st.header("🔧 Model Management")
-        
-        # Show available files
-        st.subheader("📁 Available Files")
-        
-        if model_files:
-            st.write("**Model Files Found:**")
-            for file in model_files:
-                st.write(f"🤖 {file}")
-        else:
-            st.warning("❌ No model files (.pkl) found in current directory")
-        
-        if scaler_files:
-            st.write("**Scaler Files:**")
-            for file in scaler_files:
-                st.write(f"📊 {file}")
-        
-        if encoder_files:
-            st.write("**Encoder Files:**")
-            for file in encoder_files:
-                st.write(f"🏷️ {file}")
-        
-        st.markdown("---")
-        
-        # Auto-load or manual load button
-        if model_files and not st.session_state.models_loaded:
-            if st.button("🚀 Load All Models", type="primary"):
-                try:
-                    with st.spinner("Loading models from current directory..."):
-                        st.session_state.predictor = ModelPredictor('.')
-                        st.session_state.models_loaded = True
+            df = pd.read_csv(uploaded_file)
+            st.write("**📋 Data Preview:**")
+            st.dataframe(df.head(), use_container_width=True)
+            
+            required_cols = ['B365H', 'B365D', 'B365A']
+            missing_cols = [col for col in required_cols if col not in df.columns]
+            
+            if missing_cols:
+                st.error(f"❌ Missing required columns: {missing_cols}")
+            else:
+                if st.button("🚀 Generate Predictions", type="primary"):
+                    progress_bar = st.progress(0)
+                    status_text = st.empty()
+                    results_list = []
+                    
+                    for idx, row in df.iterrows():
+                        status_text.text(f"Processing match {idx + 1} of {len(df)}")
                         
-                    if st.session_state.predictor.models:
-                        st.balloons()
-                        st.success(f"🎉 Successfully loaded {len(st.session_state.predictor.models)} models!")
-                    else:
-                        st.error("No models could be loaded")
-                        st.session_state.models_loaded = False
+                        h_odd, d_odd, a_odd = row['B365H'], row['B365D'], row['B365A']
+                        league = row.get('League', 'Unknown')
                         
-                except Exception as e:
-                    st.error(f"Error loading models: {e}")
-                    st.session_state.models_loaded = False
-        
-        elif st.session_state.models_loaded:
-            st.success(f"✅ {len(st.session_state.predictor.models)} models loaded")
-            if st.button("🔄 Reload Models"):
-                st.session_state.models_loaded = False
-                st.rerun()
-    
-    # Main content remains the same as before...
-    # [Rest of the main() function stays identical to the previous version]
+                        predictions, features = st.session_state.predictor.predict_single_match(
+                            h_odd, d_odd, a_odd, league
+                        )
+                        
+                        # Get best predictions
+                        best_ftr = None
+                        best_htr = None
+                        
+                        if predictions and 'FTR' in predictions:
+                            best_ftr = max(predictions['FTR'].items(), key=lambda x: x[1]['confidence'])
+                        if predictions and 'HTR' in predictions:
+                            best_htr = max(predictions['HTR'].items(), key=lambda x: x[1]['confidence'])
+                        
+                        results_list.append({
+                            'Match': idx + 1,
+                            'Odds': f"{h_odd:.2f}/{d_odd:.2f}/{a_odd:.2f}",
+                            'League': league,
+                            'Best_FTR_Model': best_ftr[0] if best_ftr else 'N/A',
+                            'Best_FTR_Prediction': best_ftr[1]['prediction'] if best_ftr else 'N/A',
+                            'FTR_Confidence': f"{best_ftr[1]['confidence']:.3f}" if best_ftr else 'N/A',
+                            'Best_HTR_Model': best_htr[0] if best_htr else 'N/A',
+                            'Best_HTR_Prediction': best_htr[1]['prediction'] if best_htr else 'N/A',
+                            'HTR_Confidence': f"{best_htr[1]['confidence']:.3f}" if best_htr else 'N/A',
+                            'Actual_FTR': row.get('FTR', 'N/A'),
+                            'Actual_HTR': row.get('HTR', 'N/A')
+                        })
+                        
+                        progress_bar.progress((idx + 1) / len(df))
+                    
+                    status_text.text("✅ Processing complete!")
+                    results_df = pd.DataFrame(results_list)
+                    st.write("**🎯 Prediction Results:**")
+                    st.dataframe(results_df, use_container_width=True)
+                    
+                    # Download results
+                    csv = results_df.to_csv(index=False)
+                    st.download_button(
+                        label="📥 Download Results as CSV",
+                        data=csv,
+                        file_name="prediction_results.csv",
+                        mime="text/csv"
+                    )
+                    
+        except Exception as e:
+            st.error(f"❌ Error processing file: {e}")
 
-if __name__ == "__main__":
-    main()
+with tab3:
+    st.header("ℹ️ Model Information")
+    
+    if st.session_state.predictor:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("📊 Loaded Models")
+            if st.session_state.predictor.models:
+                for model_name, model in st.session_state.predictor.models.items():
+                    with st.expander(f"🤖 {model_name}"):
+                        st.write(f"**Type:** {type(model).__name__}")
+                        if hasattr(model, 'classes_'):
+                            st.write(f"**Classes:** {list(model.classes_)}")
+                        if hasattr(model, 'feature_importances_'):
+                            st.write("**Has feature importances:** Yes")
+                        else:
+                            st.write("**Has feature importances:** No")
+            else:
+                st.warning("No models loaded")
+        
+        with col2:
+            st.subheader("🛠️ Preprocessing Objects")
+            
+            if st.session_state.predictor.scaler:
+                st.write("✅ **Scaler:** Loaded")
+            else:
+                st.write("❌ **Scaler:** Not found")
+            
+            if st.session_state.predictor.label_encoders:
+                st.write("✅ **Label Encoders:** Loaded")
+                for encoder_name in st.session_state.predictor.label_encoders.keys():
+                    st.write(f"   - {encoder_name}")
+            else:
+                st.write("❌ **Label Encoders:** Not found")
+            
+            # Feature example
+            if hasattr(st.session_state, 'current_features'):
+                st.subheader("🔍 Last Generated Features")
+                features_df = pd.DataFrame([st.session_state.current_features]).T
+                features_df.columns = ['Value']
+                st.dataframe(features_df)
+    
+    # File system info
+    st.markdown("---")
+    st.subheader("📁 Current Directory Files")
+    current_files = []
+    for file in os.listdir('.'):
+        if file.endswith('.pkl'):
+            size = os.path.getsize(file)
+            current_files.append({
+                'Filename': file,
+                'Size (KB)': f"{size/1024:.1f}",
+                'Type': 'Model' if not file.startswith(('scaler_', 'encoder_')) else 'Preprocessing'
+            })
+    
+    if current_files:
+        files_df = pd.DataFrame(current_files)
+        st.dataframe(files_df, use_container_width=True)
+    else:
+        st.info("No .pkl files found in current directory")
